@@ -5,6 +5,7 @@ import {
   keyToTile,
   getSelectorHash,
 } from './utils'
+import { fromUrl } from 'geotiff';
 
 class Tile {
   constructor({
@@ -75,8 +76,14 @@ class Tile {
               resolve(false)
             } else {
               this._loader(chunk, (err, data) => {
-                this.chunkedData[key] = data
-                resolve(true)
+                const file = "https://sentinel-cogs.s3.us-west-2.amazonaws.com/sentinel-s2-l2a-cogs/20/F/LD/2021/11/S2A_20FLD_20211126_0_L2A/L2A_PVI.tif";
+                fromUrl(file).then((tiff) => {
+                    tiff.readRasters({ width: 128, height: 128, resampleMethod: 'bilinear' }).then((tiffData) => {
+                      data.data = Float32Array.from(tiffData[0])
+                      this.chunkedData[key] = data
+                      resolve(true)
+                    })
+                });
               })
             }
           })
