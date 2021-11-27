@@ -97,7 +97,8 @@ export const createTiles = (regl, opts) => {
 
     this.initialized = new Promise((resolve) => {
       zarr().openGroup(source, (err, loaders, metadata) => {
-        const { levels, maxZoom, tileSize } = getPyramidMetadata(metadata)
+        const { levels, maxZoom } = getPyramidMetadata(metadata)
+        const tileSize = 256
         this.maxZoom = maxZoom
         const position = getPositions(tileSize, mode)
         this.position = regl.buffer(position)
@@ -112,10 +113,15 @@ export const createTiles = (regl, opts) => {
           metadata.metadata[`${levels[0]}/${variable}/.zattrs`][
             '_ARRAY_DIMENSIONS'
           ]
+        console.log(this.dimensions)
         this.shape =
+          //[256, 256]
           metadata.metadata[`${levels[0]}/${variable}/.zarray`]['shape']
+        console.log(this.shape)
         this.chunks =
+          //[256, 256]
           metadata.metadata[`${levels[0]}/${variable}/.zarray`]['chunks']
+        console.log(this.chunks)
 
         this.ndim = this.dimensions.length
 

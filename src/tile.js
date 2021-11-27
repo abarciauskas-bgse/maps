@@ -76,15 +76,22 @@ class Tile {
               resolve(false)
             } else {
               this._loader(chunk, (err, data) => {
-                const file = "https://sentinel-cogs.s3.us-west-2.amazonaws.com/sentinel-s2-l2a-cogs/20/F/LD/2021/11/S2A_20FLD_20211126_0_L2A/L2A_PVI.tif";
+                const file = "https://ds-data-projects.s3.amazonaws.com/smce-eis/3B-MO.MS.MRG.3IMERG.20200501-S000000-E235959.05.V06B.HDF5.tif";
+                console.log(data);
+                data.shape = [ 256, 256 ]
+                data.stride = [ 256, 1 ]
                 fromUrl(file).then((tiff) => {
-                    tiff.readRasters({ width: 128, height: 128, resampleMethod: 'bilinear' }).then((tiffData) => {
+                    tiff.readRasters({ width: 256, height: 256, resampleMethod: 'bilinear' }).then((tiffData) => {
                       data.data = Float32Array.from(tiffData[0])
                       this.chunkedData[key] = data
                       resolve(true)
                     })
                 });
               })
+              // this._loader(chunk, (err, data) => {
+              //   this.chunkedData[key] = data
+              //   resolve(true)
+              // })
             }
           })
       )
