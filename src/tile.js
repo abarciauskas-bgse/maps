@@ -64,68 +64,67 @@ class Tile {
     return this._buffers
   }
 
+  getCogData(chunk, key, zoom, resolve) {
+    return this._loader(chunk, (err, data) => {
+        const file = "https://ds-data-projects.s3.amazonaws.com/smce-eis/3B-MO.MS.MRG.3IMERG.20200501-S000000-E235959.05.V06B.HDF5.tif";
+        const tiffHt = 2851;
+        const tiffWd = 2841;
+        // you'll have square the factor number of tiles.
+        // Zoom level 1 has 4 tiles, so we split the height in 2 and width in 2.
+        // Zoom level 2 has 16 tiles so we split the height in 4 and width in 4.
+        // Zoom level 3 has 64 tiles so we split the height in 8 and the width in 8.
+        const factors = [1, 2, 4, 8, 16, 32]
+        const factor = factors[zoom];
+
+        const widthChunk = tiffWd / factor;
+        const heightChunk = tiffHt / factor;
+        // the current window should be offset by the width and height of the current chunk 
+        // chunk 0.0 should be [0, 0, widthChunk, heightChunk]
+        // chunk 0.1 should be [0, heightChunk, widthChunk, heightChunk * y]
+        // to read the first window
+        // const imgWindow = [ 0, 0, widthChunk, heightChunk] // xmin, ymin, xmax, ymax
+        const xKey = chunk[1]
+        const yKey = chunk[0]
+        const xStart = xKey * widthChunk
+        const yStart = yKey * heightChunk
+        const xOffset = xStart + widthChunk
+        const yOffset = yStart + heightChunk
+        const imgWindow = [ xStart, yStart, xOffset, yOffset ];
+        fromUrl(file).then((tiff) => {
+            tiff.readRasters({
+              window: imgWindow,
+              width: 128,
+              height: 128,
+              resampleMethod: 'nearest'
+            }).then((tiffData) => {
+              data.data = Float32Array.from(tiffData[0])
+              this.chunkedData[key] = data
+              resolve(true)
+            })
+        });
+      })    
+  }
+
+  getZarrData(chunk, key, resolve) {
+    this._loader(chunk, (err, data) => {
+      this.chunkedData[key] = data
+      resolve(true)
+    })
+  }
+
   async loadChunks(chunks, zoom) {
     this.loading = true
     this._resetReady()
-    console.log(chunks);
     const updated = await Promise.all(
       chunks.map(
         (chunk) =>
           new Promise((resolve) => {
             const key = chunk.join('.')
-            const xKey = chunk[1]
-            const yKey = chunk[0]
             if (this.chunkedData[key]) {
               resolve(false)
             } else {
-              console.log(`key is ${key}`)
-              this._loader(chunk, (err, data) => {
-                const file = "https://ds-data-projects.s3.amazonaws.com/smce-eis/3B-MO.MS.MRG.3IMERG.20200501-S000000-E235959.05.V06B.HDF5.tif";
-                const tiffHt = 2851;
-                const tiffWd = 2841;
-                // you'll have twice as many tiles as the factor:
-                // Zoom level 1 has a factor of 2 and 4 tiles
-                // Zoom level 2 has a factor of 4 and 16 tiles, etc.
-                const factors = [1, 2, 4, 8, 16, 32]
-                console.log('zoom')
-                console.log(zoom)
-                const factor = factors[zoom - 1]
-                // for zoom 1
-                const widthChunk = 2841 / (factor || 1);
-                console.log(widthChunk)
-                const heightChunk = 2851 / (factor || 1);
-                console.log(heightChunk)
-                // the current window should be offset by the width and height of the current chunk 
-                // chunk 0.0 should be [0, 0, widthChunk, heightChunk]
-                // chunk 0.1 should be [0, heightChunk, widthChunk, heightChunk * y]
-                // to read the first window
-                // const imgWindow = [ 0, 0, widthChunk, heightChunk] // xmin, ymin, xmax, ymax
-                const xStart = xKey * widthChunk
-                const yStart = yKey * heightChunk
-                const xOffset = xStart + widthChunk
-                const yOffset = yStart + heightChunk
-                const imgWindow = [ xStart, yStart, xOffset, yOffset ];
-                console.log(imgWindow);
-                // issue now is just that we're reading from part of the image that doesn't exist so at higher resolution zooms just need to read from the original image...
-                fromUrl(file).then((tiff) => {
-                    //console.log(tiff)
-                    tiff.readRasters({
-                      window: imgWindow,
-                      width: 128,
-                      height: 128,
-                      resampleMethod: 'bilinear'
-                    }).then((tiffData) => {
-                      data.data = Float32Array.from(tiffData[0])
-                      this.chunkedData[key] = data
-                      resolve(true)
-                    })
-                });
-              })
-
-              // this._loader(chunk, (err, data) => {
-              //   this.chunkedData[key] = data
-              //   resolve(true)
-              // })
+              return this.getCogData(chunk, key, zoom, resolve);
+              //return this.getZarrData(chunk, key, resolve);
             }
           })
       )
@@ -137,7 +136,7 @@ class Tile {
   }
 
   async populateBuffers(chunks, selector, zoom) {
-    const updated = await this.loadChunks(chunks, Math.round(zoom))
+    const updated = await this.loadChunks(chunks, Math.floor(zoom))
 
     this.populateBuffersSync(selector)
 
