@@ -116,3 +116,30 @@ All the original code in this repository is [MIT](https://choosealicense.com/lic
 ## about us
 
 CarbonPlan is a non-profit organization that uses data and science for climate action. We aim to improve the transparency and scientific integrity of carbon removal and climate solutions through open data and tools. Find out more at [carbonplan.org](https://carbonplan.org/) or get in touch by [opening an issue](https://github.com/carbonplan/maps/issues/new) or [sending us an email](mailto:hello@carbonplan.org).
+
+# Local Development
+
+To test using this package locally, begin by git cloning this repository to your machine. Then, in the `package.json` of a given application, include `"@carbonplan/maps": "file:../maps"` as a dependency with the appropriate path to where you have clone the repolocally. 
+
+Example `package.json` file:
+
+```json
+{
+  "name": "simple-map-demo",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  // ...
+  "dependencies": {
+    //...
+    "@carbonplan/maps": "file:../maps",
+    //...
+  }
+}
+```
+
+Then to watch for updates:
+
+```bash
+npm run watch
+```
