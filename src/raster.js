@@ -55,8 +55,6 @@ const Raster = (props) => {
   }, [])
 
   useEffect(() => {
-    console.log('camera')
-    console.log(camera)
     const callback = () => {
       tiles.current.updateCamera(camera.current)
       tiles.current.draw()

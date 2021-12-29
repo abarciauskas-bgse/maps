@@ -152,7 +152,7 @@ export const getDescendantsToRender = (targetKey, tiles, maxZoom) => {
         keys.push(tileToKey([x + deltaX, y + deltaY, z]))
       }
     }
-
+    
     const coveringKeys = keys.filter((key) => tiles[key].isBufferPopulated())
     const currentCoverage = coveringKeys.length / keys.length
 

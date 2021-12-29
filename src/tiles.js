@@ -1,6 +1,7 @@
 import zarr from 'zarr-js'
 import ndarray from 'ndarray'
 import { distance } from '@turf/turf'
+import { fromUrl } from 'geotiff';
 
 import { vert, frag } from './shaders'
 import {
@@ -96,77 +97,161 @@ export const createTiles = (regl, opts) => {
     customUniforms.forEach((k) => (uniforms[k] = regl.this(k)))
 
     this.initialized = new Promise((resolve) => {
-      zarr().openGroup(source, (err, loaders, metadata) => {
-        const { levels, maxZoom, tileSize } = getPyramidMetadata(metadata)
-        //const tileSize = 256
-        this.maxZoom = maxZoom
-        const position = getPositions(tileSize, mode)
-        this.position = regl.buffer(position)
-        this.size = tileSize
-        if (mode === 'grid' || mode === 'dotgrid') {
-          this.count = position.length
-        }
-        if (mode === 'texture') {
-          this.count = 6
-        }
-        this.dimensions =
-          metadata.metadata[`${levels[0]}/${variable}/.zattrs`][
-            '_ARRAY_DIMENSIONS'
-          ]
-        console.log(this.dimensions)
-        this.shape =
-          //[256, 256]
-          metadata.metadata[`${levels[0]}/${variable}/.zarray`]['shape']
-        console.log(this.shape)
-        this.chunks =
-          //[256, 256]
-          metadata.metadata[`${levels[0]}/${variable}/.zarray`]['chunks']
-        console.log(this.chunks)
+        fromUrl(source).then(async (tiff) => {
+          const tileSize = 128
+          const levels = [0, 1, 2, 3, 4, 5]
+          const maxZoom = 5;
+          this.maxZoom = maxZoom
+          const position = getPositions(tileSize, mode);
+          this.position = regl.buffer(position)
+          this.size = tileSize
+          if (mode === 'grid' || mode === 'dotgrid') {
+            this.count = position.length
+          }
+          if (mode === 'texture') {
+            this.count = 6
+          }
+          this.dimensions = ['x', 'y'];
+          this.shape = [128, 128]
+          this.chunks = [128, 128]
+          this.ndim = this.dimensions.length
 
-        this.ndim = this.dimensions.length
+          this.coordinates = {}
+          // you'll have square the factor number of tiles.
+          // Zoom level 1 has 4 tiles, so we split the height in 2 and width in 2.
+          // Zoom level 2 has 16 tiles so we split the height in 4 and width in 4.
+          // Zoom level 3 has 64 tiles so we split the height in 8 and the width in 8.
+          const factors = [1, 2, 4, 8, 16];
+          const image = await tiff.getImage();
+          const width = image.getWidth();
+          const height = image.getHeight();
+          const tileWidth = image.getTileWidth();
+          const tileHeight = image.getTileHeight();
 
-        this.coordinates = {}
-        Promise.all(
-          Object.keys(selector).map(
-            (key) =>
-              new Promise((innerResolve) => {
-                loaders[`${levels[0]}/${key}`]([0], (err, chunk) => {
-                  const coordinates = Array.from(chunk.data)
-                  this.coordinates[key] = coordinates
-                  innerResolve()
-                })
-              })
-          )
-        ).then(() => {
-          levels.forEach((z) => {
-            const loader = loaders[z + '/' + variable]
-            this.loaders[z] = loader
-            Array(Math.pow(2, z))
-              .fill(0)
-              .map((_, x) => {
-                Array(Math.pow(2, z))
-                  .fill(0)
-                  .map((_, y) => {
-                    const key = [x, y, z].join(',')
-                    this.tiles[key] = new Tile({
-                      key,
-                      loader,
-                      shape: this.shape,
-                      chunks: this.chunks,
-                      dimensions: this.dimensions,
-                      coordinates: this.coordinates,
-                      bands: this.bands,
-                      initializeBuffer: initialize,
-                    })
+          Promise.all(
+            Object.keys(selector).map(
+              (key) =>
+                new Promise((innerResolve) => {
+                  loaders[`${levels[0]}/${key}`]([0], (err, chunk) => {
+                    const coordinates = Array.from(chunk.data)
+                    this.coordinates[key] = coordinates
+                    innerResolve()
                   })
-              })
-          })
+                })
+            )
+          ).then(() => {
+            levels.forEach((z) => {
+              Array(Math.pow(2, z))
+                .fill(0)
+                .map((_, x) => {
+                  Array(Math.pow(2, z))
+                    .fill(0)
+                    .map((_, y) => {
+                      const key = [x, y, z].join(',');
 
-          resolve(true)
-          this.invalidate()
+                      const factor = factors[z];
+                      const widthChunk = width / factor;
+                      const heightChunk = height / factor;
+                      const xStart = x * widthChunk;
+                      const yStart = y * heightChunk;
+                      const xOffset = xStart + widthChunk
+                      const yOffset = yStart + heightChunk
+                      const imgWindow = [ xStart, yStart, xOffset, yOffset ];
+                      const loader = async (k, cb) => {
+                        let data;
+                        await tiff.readRasters({
+                          window: imgWindow,
+                          width: tileWidth,
+                          height: tileHeight,
+                          resampleMethod: 'nearest'
+                        }).then((tiffData) => {
+                          data = ndarray(Float32Array.from(tiffData[0]), [128, 128])
+                        })
+                        return cb(null, data)
+                      };
+                      this.loaders[z] = loader;
+
+                      this.tiles[key] = new Tile({
+                        key,
+                        loader,
+                        shape: this.shape,
+                        chunks: this.chunks,
+                        dimensions: this.dimensions,
+                        coordinates: this.coordinates,
+                        bands: this.bands,
+                        initializeBuffer: initialize,
+                      })
+                    })
+                })
+            })
+
+            resolve(true)
+            this.invalidate()
+          })
         })
+
+        // zarr().openGroup(source, (err, loaders, metadata) => {
+        //   const { levels, maxZoom, tileSize } = getPyramidMetadata(metadata)
+        //   this.maxZoom = maxZoom
+        //   const position = getPositions(tileSize, mode)
+        //   this.position = regl.buffer(position)
+        //   this.size = tileSize
+        //   if (mode === 'grid' || mode === 'dotgrid') {
+        //     this.count = position.length
+        //   }
+        //   if (mode === 'texture') {
+        //     this.count = 6
+        //   }
+        //   this.dimensions =
+        //     metadata.metadata[`${levels[0]}/${variable}/.zattrs`][
+        //       '_ARRAY_DIMENSIONS'
+        //     ]
+        //   this.shape =
+        //     metadata.metadata[`${levels[0]}/${variable}/.zarray`]['shape']
+        //   this.chunks =
+        //     metadata.metadata[`${levels[0]}/${variable}/.zarray`]['chunks']
+        //   this.ndim = this.dimensions.length
+        //   this.coordinates = {}
+        //   Promise.all(
+        //     Object.keys(selector).map(
+        //       (key) =>
+        //         new Promise((innerResolve) => {
+        //           loaders[`${levels[0]}/${key}`]([0], (err, chunk) => {
+        //             const coordinates = Array.from(chunk.data)
+        //             this.coordinates[key] = coordinates
+        //             innerResolve()
+        //           })
+        //         })
+        //     )
+        //   ).then(() => {
+        //     levels.forEach((z) => {
+        //       const loader = loaders[z + '/' + variable];
+        //       this.loaders[z] = loader
+        //       Array(Math.pow(2, z))
+        //         .fill(0)
+        //         .map((_, x) => {
+        //           Array(Math.pow(2, z))
+        //             .fill(0)
+        //             .map((_, y) => {
+        //               const key = [x, y, z].join(',')
+        //               this.tiles[key] = new Tile({
+        //                 key,
+        //                 loader,
+        //                 shape: this.shape,
+        //                 chunks: this.chunks,
+        //                 dimensions: this.dimensions,
+        //                 coordinates: this.coordinates,
+        //                 bands: this.bands,
+        //                 initializeBuffer: initialize,
+        //               })
+        //             })
+        //         })
+        //     })
+        //     resolve(true)
+        //     this.invalidate()
+        //   })
+        // })
       })
-    })
 
     this.drawTiles = regl({
       vert: vert(mode, this.bands),
