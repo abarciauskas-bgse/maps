@@ -40,6 +40,7 @@ export const createTiles = (regl, opts) => {
     frag: customFrag,
     fillValue = -9999,
     mode = 'texture',
+    type = 'zarr',
     invalidate,
     invalidateRegion,
   }) {
@@ -55,6 +56,7 @@ export const createTiles = (regl, opts) => {
     this.invalidate = invalidate
     this.viewport = { viewportHeight: 0, viewportWidth: 0 }
     this.regionOptions = regionOptions
+    this.type = type
     this.colormap = regl.texture({
       data: colormap,
       format: 'rgb',
@@ -65,470 +67,477 @@ export const createTiles = (regl, opts) => {
     if (!validModes.includes(mode)) {
       throw Error(
         `mode '${mode}' invalid, must be one of ${validModes.join(', ')}`
-      )
-    }
+        )
+      }
 
-    this.bands = getBands(variable, selector)
+      this.bands = getBands(variable, selector)
 
-    customUniforms = Object.keys(customUniforms)
+      customUniforms = Object.keys(customUniforms)
 
-    let primitive,
+      let primitive,
       initialize,
       attributes = {},
       uniforms = {}
 
-    if (mode === 'grid' || mode === 'dotgrid') {
-      primitive = 'points'
-      initialize = () => regl.buffer()
-      this.bands.forEach((k) => (attributes[k] = regl.prop(k)))
-      uniforms = {}
-    }
+      if (mode === 'grid' || mode === 'dotgrid') {
+        primitive = 'points'
+        initialize = () => regl.buffer()
+        this.bands.forEach((k) => (attributes[k] = regl.prop(k)))
+        uniforms = {}
+      }
 
-    if (mode === 'texture') {
-      primitive = 'triangles'
-      const emptyTexture = ndarray(
-        new Float32Array(Array(1).fill(fillValue)),
-        [1, 1]
-      )
-      initialize = () => regl.texture(emptyTexture)
-      this.bands.forEach((k) => (uniforms[k] = regl.prop(k)))
-    }
+      if (mode === 'texture') {
+        primitive = 'triangles'
+        const emptyTexture = ndarray(
+          new Float32Array(Array(1).fill(fillValue)),
+          [1, 1]
+          )
+          initialize = () => regl.texture(emptyTexture)
+          this.bands.forEach((k) => (uniforms[k] = regl.prop(k)))
+        }
 
-    customUniforms.forEach((k) => (uniforms[k] = regl.this(k)))
+        customUniforms.forEach((k) => (uniforms[k] = regl.this(k)))
 
-    this.initialized = new Promise((resolve) => {
-        fromUrl(source).then(async (tiff) => {
-          const tileSize = 128
-          const levels = [0, 1, 2, 3, 4, 5]
-          const maxZoom = 5;
-          this.maxZoom = maxZoom
-          const position = getPositions(tileSize, mode);
-          this.position = regl.buffer(position)
-          this.size = tileSize
-          if (mode === 'grid' || mode === 'dotgrid') {
-            this.count = position.length
-          }
-          if (mode === 'texture') {
-            this.count = 6
-          }
-          this.dimensions = ['x', 'y'];
-          this.shape = [128, 128]
-          this.chunks = [128, 128]
-          this.ndim = this.dimensions.length
+        this.initialized = new Promise((resolve) => {
+          console.log(this.type);
+          if (this.type === 'cog') {
+            fromUrl(source).then(async (tiff) => {
+              const image = await tiff.getImage();
+              const width = image.getWidth();
+              const height = image.getHeight();
+              const tileWidth = image.getTileWidth();
+              const tileHeight = image.getTileHeight();
+              // Assumption
+              const tileSize = tileWidth;
+              // Review: How do we want
+              const imageCount = await tiff.getImageCount();
+              const levels = Array.from(Array(imageCount).keys());
+              // you'll have square the factor number of tiles.
+              // Zoom level 1 has 4 tiles, so we split the height in 2 and width in 2.
+              // Zoom level 2 has 16 tiles so we split the height in 4 and width in 4.
+              // Zoom level 3 has 64 tiles so we split the height in 8 and the width in 8.
+              const factors = levels.map(z => Math.pow(2, z));
 
-          this.coordinates = {}
-          // you'll have square the factor number of tiles.
-          // Zoom level 1 has 4 tiles, so we split the height in 2 and width in 2.
-          // Zoom level 2 has 16 tiles so we split the height in 4 and width in 4.
-          // Zoom level 3 has 64 tiles so we split the height in 8 and the width in 8.
-          const factors = [1, 2, 4, 8, 16];
-          const image = await tiff.getImage();
-          const width = image.getWidth();
-          const height = image.getHeight();
-          const tileWidth = image.getTileWidth();
-          const tileHeight = image.getTileHeight();
+              this.maxZoom = imageCount - 1;
+              const position = getPositions(tileSize, mode);
+              this.position = regl.buffer(position)
+              this.size = tileSize
+              if (mode === 'grid' || mode === 'dotgrid') {
+                this.count = position.length
+              }
+              if (mode === 'texture') {
+                this.count = 6
+              }
+              // in future versions this might have a selector for different bands
+              this.dimensions = ['x', 'y'];
+              this.shape = [tileWidth, tileHeight];
+              this.chunks = this.shape;
+              this.ndim = this.dimensions.length
 
-          Promise.all(
-            Object.keys(selector).map(
-              (key) =>
-                new Promise((innerResolve) => {
-                  loaders[`${levels[0]}/${key}`]([0], (err, chunk) => {
-                    const coordinates = Array.from(chunk.data)
-                    this.coordinates[key] = coordinates
-                    innerResolve()
+              this.coordinates = {}
+
+              Promise.all(
+                Object.keys(selector).map(
+                  (key) =>
+                  new Promise((innerResolve) => {
+                    loaders[`${levels[0]}/${key}`]([0], (err, chunk) => {
+                      const coordinates = Array.from(chunk.data)
+                      this.coordinates[key] = coordinates
+                      innerResolve()
+                    })
                   })
-                })
-            )
-          ).then(() => {
-            levels.forEach((z) => {
-              Array(Math.pow(2, z))
-                .fill(0)
-                .map((_, x) => {
-                  Array(Math.pow(2, z))
-                    .fill(0)
-                    .map((_, y) => {
-                      const key = [x, y, z].join(',');
+                  )
+                  ).then(() => {
+                    levels.forEach((z) => {
+                      Array(Math.pow(2, z))
+                      .fill(0)
+                      .map((_, x) => {
+                        Array(Math.pow(2, z))
+                        .fill(0)
+                        .map((_, y) => {
+                          const key = [x, y, z].join(',');
 
-                      const factor = factors[z];
-                      const widthChunk = width / factor;
-                      const heightChunk = height / factor;
-                      const xStart = x * widthChunk;
-                      const yStart = y * heightChunk;
-                      const xOffset = xStart + widthChunk
-                      const yOffset = yStart + heightChunk
-                      const imgWindow = [ xStart, yStart, xOffset, yOffset ];
-                      const loader = async (k, cb) => {
-                        let data;
-                        await tiff.readRasters({
-                          window: imgWindow,
-                          width: tileWidth,
-                          height: tileHeight,
-                          resampleMethod: 'nearest'
-                        }).then((tiffData) => {
-                          data = ndarray(Float32Array.from(tiffData[0]), [128, 128])
+                          const factor = factors[z];
+                          const widthChunk = width / factor;
+                          const heightChunk = height / factor;
+                          const xStart = x * widthChunk;
+                          const yStart = y * heightChunk;
+                          const xOffset = xStart + widthChunk
+                          const yOffset = yStart + heightChunk
+                          const imgWindow = [ xStart, yStart, xOffset, yOffset ];
+                          const loader = async (k, cb) => {
+                            let data;
+                            await tiff.readRasters({
+                              window: imgWindow,
+                              width: tileWidth,
+                              height: tileHeight,
+                              resampleMethod: 'nearest'
+                            }).then((tiffData) => {
+                              data = ndarray(Float32Array.from(tiffData[0]), this.shape)
+                            })
+                            return cb(null, data)
+                          };
+                          this.loaders[z] = loader;
+
+                          this.tiles[key] = new Tile({
+                            key,
+                            loader,
+                            shape: this.shape,
+                            chunks: this.chunks,
+                            dimensions: this.dimensions,
+                            coordinates: this.coordinates,
+                            bands: this.bands,
+                            initializeBuffer: initialize,
+                          })
                         })
-                        return cb(null, data)
-                      };
-                      this.loaders[z] = loader;
-
-                      this.tiles[key] = new Tile({
-                        key,
-                        loader,
-                        shape: this.shape,
-                        chunks: this.chunks,
-                        dimensions: this.dimensions,
-                        coordinates: this.coordinates,
-                        bands: this.bands,
-                        initializeBuffer: initialize,
                       })
                     })
-                })
-            })
 
-            resolve(true)
-            this.invalidate()
-          })
-        })
-
-        // zarr().openGroup(source, (err, loaders, metadata) => {
-        //   const { levels, maxZoom, tileSize } = getPyramidMetadata(metadata)
-        //   this.maxZoom = maxZoom
-        //   const position = getPositions(tileSize, mode)
-        //   this.position = regl.buffer(position)
-        //   this.size = tileSize
-        //   if (mode === 'grid' || mode === 'dotgrid') {
-        //     this.count = position.length
-        //   }
-        //   if (mode === 'texture') {
-        //     this.count = 6
-        //   }
-        //   this.dimensions =
-        //     metadata.metadata[`${levels[0]}/${variable}/.zattrs`][
-        //       '_ARRAY_DIMENSIONS'
-        //     ]
-        //   this.shape =
-        //     metadata.metadata[`${levels[0]}/${variable}/.zarray`]['shape']
-        //   this.chunks =
-        //     metadata.metadata[`${levels[0]}/${variable}/.zarray`]['chunks']
-        //   this.ndim = this.dimensions.length
-        //   this.coordinates = {}
-        //   Promise.all(
-        //     Object.keys(selector).map(
-        //       (key) =>
-        //         new Promise((innerResolve) => {
-        //           loaders[`${levels[0]}/${key}`]([0], (err, chunk) => {
-        //             const coordinates = Array.from(chunk.data)
-        //             this.coordinates[key] = coordinates
-        //             innerResolve()
-        //           })
-        //         })
-        //     )
-        //   ).then(() => {
-        //     levels.forEach((z) => {
-        //       const loader = loaders[z + '/' + variable];
-        //       this.loaders[z] = loader
-        //       Array(Math.pow(2, z))
-        //         .fill(0)
-        //         .map((_, x) => {
-        //           Array(Math.pow(2, z))
-        //             .fill(0)
-        //             .map((_, y) => {
-        //               const key = [x, y, z].join(',')
-        //               this.tiles[key] = new Tile({
-        //                 key,
-        //                 loader,
-        //                 shape: this.shape,
-        //                 chunks: this.chunks,
-        //                 dimensions: this.dimensions,
-        //                 coordinates: this.coordinates,
-        //                 bands: this.bands,
-        //                 initializeBuffer: initialize,
-        //               })
-        //             })
-        //         })
-        //     })
-        //     resolve(true)
-        //     this.invalidate()
-        //   })
-        // })
-      })
-
-    this.drawTiles = regl({
-      vert: vert(mode, this.bands),
-
-      frag: frag(mode, this.bands, customFrag, customUniforms),
-
-      attributes: {
-        position: regl.this('position'),
-        ...attributes,
-      },
-
-      uniforms: {
-        viewportWidth: regl.context('viewportWidth'),
-        viewportHeight: regl.context('viewportHeight'),
-        pixelRatio: regl.context('pixelRatio'),
-        colormap: regl.this('colormap'),
-        camera: regl.this('camera'),
-        size: regl.this('size'),
-        zoom: regl.this('zoom'),
-        globalLevel: regl.this('level'),
-        level: regl.prop('level'),
-        offset: regl.prop('offset'),
-        clim: regl.this('clim'),
-        opacity: regl.this('opacity'),
-        fillValue: regl.this('fillValue'),
-        ...uniforms,
-      },
-
-      blend: {
-        enable: true,
-        func: {
-          src: 'one',
-          srcAlpha: 'one',
-          dstRGB: 'one minus src alpha',
-          dstAlpha: 'one minus src alpha',
-        },
-      },
-
-      depth: { enable: false },
-
-      count: regl.this('count'),
-
-      primitive: primitive,
-    })
-
-    this.getProps = () => {
-      const adjustedActive = Object.keys(this.tiles)
-        .filter((key) => this.active[key])
-        .reduce((accum, key) => {
-          const keysToRender = getKeysToRender(key, this.tiles, this.maxZoom)
-          keysToRender.forEach((keyToRender) => {
-            const offsets = this.active[key]
-
-            offsets.forEach((offset) => {
-              const adjustedOffset = getAdjustedOffset(offset, keyToRender)
-              if (!accum[keyToRender]) {
-                accum[keyToRender] = []
-              }
-
-              const alreadySeenOffset = accum[keyToRender].find(
-                (prev) =>
-                  prev[0] === adjustedOffset[0] && prev[1] === adjustedOffset[1]
-              )
-              if (!alreadySeenOffset) {
-                accum[keyToRender].push(adjustedOffset)
-              }
-            })
-          })
-
-          return accum
-        }, {})
-
-      const activeKeys = Object.keys(adjustedActive)
-
-      return activeKeys.reduce((accum, key) => {
-        if (!getOverlappingAncestor(key, activeKeys)) {
-          const [, , level] = keyToTile(key)
-          const tile = this.tiles[key]
-          const offsets = adjustedActive[key]
-
-          offsets.forEach((offset) => {
-            accum.push({
-              ...tile.getBuffers(),
-              level,
-              offset,
-            })
-          })
-        }
-
-        return accum
-      }, [])
-    }
-
-    regl.frame(({ viewportHeight, viewportWidth }) => {
-      if (
-        this.viewport.viewportHeight !== viewportHeight ||
-        this.viewport.viewportWidth !== viewportWidth
-      ) {
-        this.viewport = { viewportHeight, viewportWidth }
-        this.invalidate()
-      }
-    })
-
-    this.draw = () => {
-      this.drawTiles(this.getProps())
-    }
-
-    this.updateCamera = ({ center, zoom }) => {
-      const level = zoomToLevel(zoom, this.maxZoom)
-      const tile = pointToTile(center.lng, center.lat, level)
-      const camera = pointToCamera(center.lng, center.lat, level)
-
-      this.level = level
-      this.zoom = zoom
-      this.camera = [camera[0], camera[1]]
-
-      this.active = getSiblings(tile, {
-        viewport: this.viewport,
-        zoom,
-        camera: this.camera,
-        size: this.size,
-      })
-
-      Promise.all(
-        Object.keys(this.active).map(
-          (key) =>
-            new Promise((resolve) => {
-              if (this.loaders[level]) {
-                const tileIndex = keyToTile(key)
-                const tile = this.tiles[key]
-
-                const chunks = getChunks(
-                  this.selector,
-                  this.dimensions,
-                  this.coordinates,
-                  this.shape,
-                  this.chunks,
-                  tileIndex[0],
-                  tileIndex[1]
-                )
-
-                if (!tile.hasPopulatedBuffer(this.selector)) {
-                  if (!tile.loading) {
-                    if (tile.hasLoadedChunks(chunks)) {
-                      tile.populateBuffersSync(this.selector)
-                      this.invalidate()
-                      resolve(false)
-                    } else {
-                      tile
-                        .populateBuffers(chunks, this.selector, this.zoom)
-                        .then((dataUpdated) => {
-                          this.invalidate()
-                          resolve(dataUpdated)
-                        })
-                    }
-                  }
-                }
-              }
-            })
-        )
-      ).then((results) => {
-        if (results.some(Boolean)) {
-          invalidateRegion()
-        }
-      })
-    }
-
-    this.queryRegion = async (region) => {
-      const tiles = getTilesOfRegion(region, this.level)
-
-      await this.initialized
-
-      if (this.regionOptions.loadAllChunks) {
-        await Promise.all(
-          tiles.map((key) => {
-            const tileIndex = keyToTile(key)
-            const chunks = getChunks(
-              {},
-              this.dimensions,
-              this.coordinates,
-              this.shape,
-              this.chunks,
-              tileIndex[0],
-              tileIndex[1]
-            )
-            return this.tiles[key].loadChunks(chunks)
-          })
-        )
-      } else {
-        await Promise.all(tiles.map((key) => this.tiles[key].ready))
-      }
-
-      let results,
-        lat = [],
-        lon = []
-      if (this.ndim > 2) {
-        results = {}
-      } else {
-        results = []
-      }
-
-      tiles.map((key) => {
-        const [x, y, z] = keyToTile(key)
-        const { center, radius, units } = region.properties
-        for (let i = 0; i < this.size; i++) {
-          for (let j = 0; j < this.size; j++) {
-            const pointCoords = cameraToPoint(
-              x + i / this.size,
-              y + j / this.size,
-              z
-            )
-            const distanceToCenter = distance(
-              [center.lng, center.lat],
-              pointCoords,
-              {
-                units,
-              }
-            )
-            if (distanceToCenter < radius) {
-              lon.push(pointCoords[0])
-              lat.push(pointCoords[1])
-
-              if (this.ndim > 2) {
-                const valuesToSet = getValuesToSet(
-                  this.tiles[key].getData(),
-                  i,
-                  j,
-                  this.dimensions,
-                  this.coordinates
-                )
-
-                valuesToSet.forEach(({ keys, value }) => {
-                  setObjectValues(results, keys, value)
+                    resolve(true)
+                    this.invalidate()
+                  })
                 })
               } else {
-                results.push(data.get(j, i))
-              }
-            }
-          }
-        }
-      })
+                zarr().openGroup(source, (err, loaders, metadata) => {
+                  const { levels, maxZoom, tileSize } = getPyramidMetadata(metadata)
+                  this.maxZoom = maxZoom
+                  const position = getPositions(tileSize, mode)
+                  this.position = regl.buffer(position)
+                  this.size = tileSize
+                  if (mode === 'grid' || mode === 'dotgrid') {
+                    this.count = position.length
+                  }
+                  if (mode === 'texture') {
+                    this.count = 6
+                  }
+                  this.dimensions =
+                  metadata.metadata[`${levels[0]}/${variable}/.zattrs`][
+                    '_ARRAY_DIMENSIONS'
+                  ]
+                  this.shape =
+                  metadata.metadata[`${levels[0]}/${variable}/.zarray`]['shape']
+                  this.chunks =
+                  metadata.metadata[`${levels[0]}/${variable}/.zarray`]['chunks']
+                  this.ndim = this.dimensions.length
+                  this.coordinates = {}
+                  Promise.all(
+                    Object.keys(selector).map(
+                      (key) =>
+                      new Promise((innerResolve) => {
+                        loaders[`${levels[0]}/${key}`]([0], (err, chunk) => {
+                          const coordinates = Array.from(chunk.data)
+                          this.coordinates[key] = coordinates
+                          innerResolve()
+                        })
+                      })
+                      )
+                      ).then(() => {
+                        levels.forEach((z) => {
+                          const loader = loaders[z + '/' + variable];
+                          this.loaders[z] = loader
+                          Array(Math.pow(2, z))
+                          .fill(0)
+                          .map((_, x) => {
+                            Array(Math.pow(2, z))
+                            .fill(0)
+                            .map((_, y) => {
+                              const key = [x, y, z].join(',')
+                              this.tiles[key] = new Tile({
+                                key,
+                                loader,
+                                shape: this.shape,
+                                chunks: this.chunks,
+                                dimensions: this.dimensions,
+                                coordinates: this.coordinates,
+                                bands: this.bands,
+                                initializeBuffer: initialize,
+                              })
+                            })
+                          })
+                        })
+                        resolve(true)
+                        this.invalidate()
+                      })
+                    })
+                  }
+                })
 
-      const out = { [this.variable]: results }
+                this.drawTiles = regl({
+                  vert: vert(mode, this.bands),
 
-      if (this.ndim > 2) {
-        out.dimensions = [...Object.keys(this.coordinates), 'lat', 'lon']
-        out.coordinates = { ...this.coordinates, lat, lon }
-      } else {
-        out.dimensions = ['lat', 'lon']
-        out.coordinates = { lat, lon }
-      }
+                  frag: frag(mode, this.bands, customFrag, customUniforms),
 
-      return out
-    }
+                  attributes: {
+                    position: regl.this('position'),
+                    ...attributes,
+                  },
 
-    this.updateSelector = ({ selector }) => {
-      this.selector = selector
-      this.invalidate()
-    }
+                  uniforms: {
+                    viewportWidth: regl.context('viewportWidth'),
+                    viewportHeight: regl.context('viewportHeight'),
+                    pixelRatio: regl.context('pixelRatio'),
+                    colormap: regl.this('colormap'),
+                    camera: regl.this('camera'),
+                    size: regl.this('size'),
+                    zoom: regl.this('zoom'),
+                    globalLevel: regl.this('level'),
+                    level: regl.prop('level'),
+                    offset: regl.prop('offset'),
+                    clim: regl.this('clim'),
+                    opacity: regl.this('opacity'),
+                    fillValue: regl.this('fillValue'),
+                    ...uniforms,
+                  },
 
-    this.updateUniforms = (props) => {
-      Object.keys(props).forEach((k) => {
-        this[k] = props[k]
-      })
-      if (!this.display) {
-        this.opacity = 0
-      }
-      this.invalidate()
-    }
+                  blend: {
+                    enable: true,
+                    func: {
+                      src: 'one',
+                      srcAlpha: 'one',
+                      dstRGB: 'one minus src alpha',
+                      dstAlpha: 'one minus src alpha',
+                    },
+                  },
 
-    this.updateColormap = ({ colormap }) => {
-      this.colormap = regl.texture({
-        data: colormap,
-        format: 'rgb',
-        shape: [colormap.length, 1],
-      })
-      this.invalidate()
-    }
-  }
-}
+                  depth: { enable: false },
+
+                  count: regl.this('count'),
+
+                  primitive: primitive,
+                })
+
+                this.getProps = () => {
+                  const adjustedActive = Object.keys(this.tiles)
+                  .filter((key) => this.active[key])
+                  .reduce((accum, key) => {
+                    const keysToRender = getKeysToRender(key, this.tiles, this.maxZoom)
+                    keysToRender.forEach((keyToRender) => {
+                      const offsets = this.active[key]
+
+                      offsets.forEach((offset) => {
+                        const adjustedOffset = getAdjustedOffset(offset, keyToRender)
+                        if (!accum[keyToRender]) {
+                          accum[keyToRender] = []
+                        }
+
+                        const alreadySeenOffset = accum[keyToRender].find(
+                          (prev) =>
+                          prev[0] === adjustedOffset[0] && prev[1] === adjustedOffset[1]
+                          )
+                          if (!alreadySeenOffset) {
+                            accum[keyToRender].push(adjustedOffset)
+                          }
+                        })
+                      })
+
+                      return accum
+                    }, {})
+
+                    const activeKeys = Object.keys(adjustedActive)
+
+                    return activeKeys.reduce((accum, key) => {
+                      if (!getOverlappingAncestor(key, activeKeys)) {
+                        const [, , level] = keyToTile(key)
+                        const tile = this.tiles[key]
+                        const offsets = adjustedActive[key]
+
+                        offsets.forEach((offset) => {
+                          accum.push({
+                            ...tile.getBuffers(),
+                            level,
+                            offset,
+                          })
+                        })
+                      }
+
+                      return accum
+                    }, [])
+                  }
+
+                  regl.frame(({ viewportHeight, viewportWidth }) => {
+                    if (
+                      this.viewport.viewportHeight !== viewportHeight ||
+                      this.viewport.viewportWidth !== viewportWidth
+                      ) {
+                        this.viewport = { viewportHeight, viewportWidth }
+                        this.invalidate()
+                      }
+                    })
+
+                    this.draw = () => {
+                      this.drawTiles(this.getProps())
+                    }
+
+                    this.updateCamera = ({ center, zoom }) => {
+                      const level = zoomToLevel(zoom, this.maxZoom)
+                      const tile = pointToTile(center.lng, center.lat, level)
+                      const camera = pointToCamera(center.lng, center.lat, level)
+
+                      this.level = level
+                      this.zoom = zoom
+                      this.camera = [camera[0], camera[1]]
+
+                      this.active = getSiblings(tile, {
+                        viewport: this.viewport,
+                        zoom,
+                        camera: this.camera,
+                        size: this.size,
+                      })
+
+                      Promise.all(
+                        Object.keys(this.active).map(
+                          (key) =>
+                          new Promise((resolve) => {
+                            if (this.loaders[level]) {
+                              const tileIndex = keyToTile(key)
+                              const tile = this.tiles[key]
+
+                              const chunks = getChunks(
+                                this.selector,
+                                this.dimensions,
+                                this.coordinates,
+                                this.shape,
+                                this.chunks,
+                                tileIndex[0],
+                                tileIndex[1]
+                                )
+
+                                if (!tile.hasPopulatedBuffer(this.selector)) {
+                                  if (!tile.loading) {
+                                    if (tile.hasLoadedChunks(chunks)) {
+                                      tile.populateBuffersSync(this.selector)
+                                      this.invalidate()
+                                      resolve(false)
+                                    } else {
+                                      tile
+                                      .populateBuffers(chunks, this.selector, this.zoom)
+                                      .then((dataUpdated) => {
+                                        this.invalidate()
+                                        resolve(dataUpdated)
+                                      })
+                                    }
+                                  }
+                                }
+                              }
+                            })
+                            )
+                            ).then((results) => {
+                              if (results.some(Boolean)) {
+                                invalidateRegion()
+                              }
+                            })
+                          }
+
+                          this.queryRegion = async (region) => {
+                            const tiles = getTilesOfRegion(region, this.level)
+
+                            await this.initialized
+
+                            if (this.regionOptions.loadAllChunks) {
+                              await Promise.all(
+                                tiles.map((key) => {
+                                  const tileIndex = keyToTile(key)
+                                  const chunks = getChunks(
+                                    {},
+                                    this.dimensions,
+                                    this.coordinates,
+                                    this.shape,
+                                    this.chunks,
+                                    tileIndex[0],
+                                    tileIndex[1]
+                                    )
+                                    return this.tiles[key].loadChunks(chunks)
+                                  })
+                                  )
+                                } else {
+                                  await Promise.all(tiles.map((key) => this.tiles[key].ready))
+                                }
+
+                                let results,
+                                lat = [],
+                                lon = []
+                                if (this.ndim > 2) {
+                                  results = {}
+                                } else {
+                                  results = []
+                                }
+
+                                tiles.map((key) => {
+                                  const [x, y, z] = keyToTile(key)
+                                  const { center, radius, units } = region.properties
+                                  for (let i = 0; i < this.size; i++) {
+                                    for (let j = 0; j < this.size; j++) {
+                                      const pointCoords = cameraToPoint(
+                                        x + i / this.size,
+                                        y + j / this.size,
+                                        z
+                                        )
+                                        const distanceToCenter = distance(
+                                          [center.lng, center.lat],
+                                          pointCoords,
+                                          {
+                                            units,
+                                          }
+                                          )
+                                          if (distanceToCenter < radius) {
+                                            lon.push(pointCoords[0])
+                                            lat.push(pointCoords[1])
+
+                                            if (this.ndim > 2) {
+                                              const valuesToSet = getValuesToSet(
+                                                this.tiles[key].getData(),
+                                                i,
+                                                j,
+                                                this.dimensions,
+                                                this.coordinates
+                                                )
+
+                                                valuesToSet.forEach(({ keys, value }) => {
+                                                  setObjectValues(results, keys, value)
+                                                })
+                                              } else {
+                                                results.push(data.get(j, i))
+                                              }
+                                            }
+                                          }
+                                        }
+                                      })
+
+                                      const out = { [this.variable]: results }
+
+                                      if (this.ndim > 2) {
+                                        out.dimensions = [...Object.keys(this.coordinates), 'lat', 'lon']
+                                        out.coordinates = { ...this.coordinates, lat, lon }
+                                      } else {
+                                        out.dimensions = ['lat', 'lon']
+                                        out.coordinates = { lat, lon }
+                                      }
+
+                                      return out
+                                    }
+
+                                    this.updateSelector = ({ selector }) => {
+                                      this.selector = selector
+                                      this.invalidate()
+                                    }
+
+                                    this.updateUniforms = (props) => {
+                                      Object.keys(props).forEach((k) => {
+                                        this[k] = props[k]
+                                      })
+                                      if (!this.display) {
+                                        this.opacity = 0
+                                      }
+                                      this.invalidate()
+                                    }
+
+                                    this.updateColormap = ({ colormap }) => {
+                                      this.colormap = regl.texture({
+                                        data: colormap,
+                                        format: 'rgb',
+                                        shape: [colormap.length, 1],
+                                      })
+                                      this.invalidate()
+                                    }
+                                  }
+                                }
